@@ -66,26 +66,33 @@ classDiagram
 Backend (`backend/src/main/java/team/projectpulse/`):
 
 - `student/StudentController.java`: new `deactivateStudent`.
-- `student/StudentService.java`:
+- `student/StudentService.java` (the class is `@Transactional`, so team removal and the status change commit together):
   - new `deactivateStudent`;
-  - `updateStudent` may set `enabled` to true but never to false, and it stops reading `SecurityContextHolder`.
+  - `updateStudent` may set `enabled` to true but never to false, and it applies `true` only when the caller is an instructor (`UserUtils.hasRole("ROLE_instructor")`, replacing today's `SecurityContextHolder` read). The route also admits the student herself, and her pre-deactivation token is still valid for up to 2 hours, so without this check she could reactivate herself.
 - `student/converter/StudentDtoToStudentConverter.java`: unchanged. `StudentDto.enabled` is still read so that `true` can reactivate.
 - `student/StudentSecurityService.java`: new `isCurrentUserAdminOfStudentCourse`, modeled on `InstructorSecurityService.isCurrentUserAdminOfInstructorCourse`. It returns false for an unknown id.
 - `security/authorizationmanagers/`: new `StudentCourseAdminAuthorizationManager`, combined with the reused `StudentInstructorAuthorizationManager`; route rule in `security/SecurityConfiguration.java`.
-- `system/exception/`: new `StudentStatusConflictException`, mapped to `409 CONFLICT` in `ExceptionHandlerAdvice`.
+- `system/exception/`: new `StudentStatusConflictException`, mapped to HTTP 409 with `StatusCode.CONFLICT` and the message "This student is already deactivated." in `ExceptionHandlerAdvice`.
+- `src/main/resources/db/migration/`: a data-only Flyway migration that removes every already-deactivated student from her team (see Data model).
 - `team/Team.java`: `removeStudent` is reused as is.
 - `evaluation/EvaluationService.java`:
   - `addPeerEvaluation` is unchanged; its shared-team check already refuses an evaluatee with no team;
-  - `updatePeerEvaluation` gains the same shared-team check;
+  - `updatePeerEvaluation` gains the same shared-team check: it fails when either the evaluator or the evaluatee is on no team, or when their team ids differ, so two students on no team never match;
   - `generateWeeklyPeerEvaluationReportForSection` adds former members.
-- `evaluation/PeerEvaluationRepository.java`: one new finder for the students of a course section on no team who were evaluated in a given week.
+- `evaluation/PeerEvaluationRepository.java`: one new finder for the distinct students whose course section is the report's, who are on no team, and who received at least one peer evaluation (from any evaluator, self-evaluation included) for the given week. Former members follow the on-team rows, ordered by last name and then first name; the on-team rows keep their current order.
 - `evaluation/PeerEvaluationAverage.java`: new `formerMember`.
 
 Frontend (`frontend/src/`):
 
 - `apis/student`: new `deactivateStudent(id)`.
 - `pages/students/Students.vue`:
-  - a Deactivate button in Operations for active rows, behind an `ElMessageBox.confirm` that states the consequences (precedent: `pages/sections/Sections.vue`);
+  - a Deactivate button in Operations for active rows, behind an `ElMessageBox.confirm` (precedent: `pages/sections/Sections.vue`). The dialog lists every consequence in the use case's Associated Information (step 4):
+    - she can no longer log in or submit weekly activity reports and peer evaluations;
+    - she is removed from her team, and her teammates can no longer evaluate her;
+    - her account and past work are kept, and she appears as a former member in the weekly peer evaluation report;
+    - the account can be reactivated later, but that does not restore her team;
+    - this is not deletion.
+  - On success the page shows "Student deactivated." and reloads the list (step 6). On a 409 (3a) it shows no message of its own, because the shared Axios interceptor already shows the server's message "This student is already deactivated.", and it reloads the list;
   - the status tag reads **Active / Deactivated**, the spec's terms, instead of Enabled / Disabled.
 - `pages/students/EditStudentForm.vue`: the status switch is replaced by a read-only status and, only for a deactivated student, a Reactivate control. That is today's reactivation path, kept until UC-STU-reactivate-student is designed.
 - `pages/evaluations/admin/SectionsEvaluations.vue`: a "former member" tag beside the student's name when `formerMember` is true.
@@ -164,13 +171,16 @@ sequenceDiagram
 - **Deactivation removes her from her team, in the same transaction.** Rejected: keeping her on the team and filtering on `enabled` in every team-scoped query, roster, and form. That needs a second predicate everywhere, and one missed predicate shows her as a member. Removal has a useful side effect. A bearer token issued before deactivation stays valid for up to 2 hours (FR-SEC-active-account), but with no team that token can't submit a weekly activity report or a peer evaluation (BR-team-assignment-required), and it can't pass a team-membership route rule into RAM.
 - **"Former member" is computed as "on no team now", not stored.** The history we need is already recorded: received peer evaluations carry their week, and an `Activity` has its own `team` foreign key set at submission. Rejected: a team-membership history table, which would be a schema change for a label. Two consequences follow:
   - The rule covers plain removal (UC-TEA-remove-student) as well as deactivation, because the code can't tell them apart and the meaning is the same. That is why it is BR-former-team-member and not part of BR-student-lifecycle.
-  - A student moved to *another* team appears under her current team, not as a former member.
+  - A student moved to *another* team appears under her current team, not as a former member, and that week's averages include every evaluation she received. She is still listed for that week, so the report hides nothing. The label applies only when she is on no team, which is the state BR-former-team-member describes as having left.
 - **Editing an evaluation of a former member is refused too, not only creating one.** Without it, a teammate could keep rewriting an evaluation of her while the submission window is still open after she leaves. Rejected: letting edits through because the evaluation predates her leaving. `updatePeerEvaluation` re-runs the shared-team check that `addPeerEvaluation` already makes.
-- **A repeat deactivation is a 409, not a silent success.** A stale list would otherwise report a change that did not happen (3a). Rejected: an idempotent 200.
+- **A repeat deactivation is a 409, not a silent success.** A stale list would otherwise report a change that did not happen (3a). Rejected: an idempotent 200. The Deactivate button appears only on active rows, so 3a can arise only from a stale list, and the server reports it after the confirmation rather than at step 3. The outcome is the one 3a requires: no change, and the actor is told.
+- **The control lives on the student list.** `Students.vue` and its edit dialog are the existing UC-STU-view-student surface (see its traceability row), so the list row is where step 2 leaves the actor. Rejected: a separate student detail page, which doesn't exist and isn't needed.
 
 ## Data model
 
-No schema delta. The data already exists: the user's `enabled` column, the student's `team` foreign key, and the activity's `team` foreign key. `formerMember` is a computed DTO field. The shared model is in the SRS's Business Domain Model.
+No schema delta, but one **data** migration. The old toggle deactivated students without removing them from their teams, so `staging` and `prod` may hold deactivated students still on a team. The new `V<n>__remove_deactivated_students_from_teams.sql` sets the team to null for every student whose account is disabled, which brings existing data in line with BR-student-lifecycle and lets BR-former-team-member label them. `dev` reseeds every student as active, so it needs nothing. Rejected: leaving the old rows as they are, which would keep those students on rosters and on the peer evaluation form.
+
+ The data already exists: the user's `enabled` column, the student's `team` foreign key, and the activity's `team` foreign key. `formerMember` is a computed DTO field. The shared model is in the SRS's Business Domain Model.
 
 ## Reuse & cross-cutting
 
@@ -200,7 +210,10 @@ No schema delta. The data already exists: the user's `enabled` column, the stude
 | report, week she received evaluations (BR-former-team-member) | unit + integration | Her row is present with `formerMember: true` and that week's averages |
 | report, week she received none | unit | No row for her |
 | report, current members | unit | Rows unchanged, with `formerMember: false` |
-| generic update | unit + integration | `PUT /students/{studentId}` with `enabled: false` leaves her active; with `enabled: true` on a deactivated student it reactivates her without restoring a team |
+| generic update | unit + integration | `PUT /students/{studentId}` with `enabled: false` leaves her active; an assigned instructor's `enabled: true` on a deactivated student reactivates her without restoring a team; the student's own `PUT` with `enabled: true`, using a token issued before deactivation, leaves her deactivated |
+| peer evaluation, edit, both on no team (BR-former-team-member) | unit | An evaluator on no team cannot edit an evaluation of an evaluatee on no team |
+| report, former members ordering | unit | Former members follow on-team rows, by last name then first name |
+| data migration | manual, on staging | Integration tests run the `dev` profile, which builds the schema with `ddl-auto: create` and never runs Flyway. So before and after the migration on staging, query for disabled students with a team: the count drops to zero, and active students keep their teams |
 
 ## Open questions / risks
 
