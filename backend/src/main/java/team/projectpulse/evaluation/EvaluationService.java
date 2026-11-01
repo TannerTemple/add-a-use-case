@@ -59,13 +59,7 @@ public class EvaluationService {
             throw new PeerEvaluationIllegalArgumentException("You must be assigned to a team before submitting a peer evaluation.");
         }
 
-        // Make sure the evaluator and evaluatee are on the same team. Compare team ids: Team does not override
-        // equals, so comparing the entities is identity comparison and only happens to hold within one session.
-        Integer evaluatorTeamId = evaluatorTeam.getTeamId();
-        Team evaluateeTeam = newPeerEvaluation.getEvaluatee().getTeam();
-        if (evaluatorTeamId == null || evaluateeTeam == null || !evaluatorTeamId.equals(evaluateeTeam.getTeamId())) {
-            throw new PeerEvaluationIllegalArgumentException("The evaluator and evaluatee must be on the same team.");
-        }
+        requireSameTeam(newPeerEvaluation.getEvaluator(), newPeerEvaluation.getEvaluatee());
 
         // Make sure this is not a duplicate evaluation
         if (this.evaluationRepository.findByWeekAndEvaluatorIdAndEvaluateeId(newPeerEvaluation.getWeek(), newPeerEvaluation.getEvaluator().getId(), newPeerEvaluation.getEvaluatee().getId()).isPresent()) {
@@ -81,12 +75,31 @@ public class EvaluationService {
                     // The week is read off the stored evaluation rather than off the update, because the caller
                     // writes the payload and could otherwise name an open week to reopen a closed evaluation.
                     requireOpenSubmissionWindow(oldEvaluation.getEvaluator().getSection(), oldEvaluation.getWeek(), WINDOW_CLOSED_MESSAGE);
+                    // An evaluatee who has left the evaluator's team is no longer hers to evaluate, by an edit any
+                    // more than by a new evaluation (BR-former-team-member), even while the window is still open.
+                    requireSameTeam(oldEvaluation.getEvaluator(), oldEvaluation.getEvaluatee());
                     rescore(oldEvaluation, update.getRatings());
                     oldEvaluation.setPublicComment(update.getPublicComment());
                     oldEvaluation.setPrivateComment(update.getPrivateComment());
                     return this.evaluationRepository.save(oldEvaluation);
                 })
                 .orElseThrow(() -> new ObjectNotFoundException("evaluation", evaluationId));
+    }
+
+    /**
+     * Refuses a peer evaluation, or an edit of one, unless the evaluator and evaluatee are on the same team now.
+     * A student on no team matches nobody, not even another student on no team, so a former member
+     * (BR-former-team-member) can be neither evaluated nor have an evaluation of her rewritten. Compare team ids:
+     * Team does not override equals, so comparing the entities is identity comparison and only happens to hold
+     * within one session.
+     */
+    private void requireSameTeam(Student evaluator, Student evaluatee) {
+        Team evaluatorTeam = evaluator.getTeam();
+        Team evaluateeTeam = evaluatee.getTeam();
+        Integer evaluatorTeamId = evaluatorTeam == null ? null : evaluatorTeam.getTeamId();
+        if (evaluatorTeamId == null || evaluateeTeam == null || !evaluatorTeamId.equals(evaluateeTeam.getTeamId())) {
+            throw new PeerEvaluationIllegalArgumentException("The evaluator and evaluatee must be on the same team.");
+        }
     }
 
     /**
@@ -220,12 +233,17 @@ public class EvaluationService {
 
         report.setSectionName(this.sectionRepository.findById(sectionId).orElseThrow(() -> new ObjectNotFoundException("section", sectionId)).getSectionName());
 
-        // Get all students in the section
+        // Get all students in the section who are on a team
         List<Student> students = this.studentRepository.findBySectionSectionId(sectionId).stream().filter(student -> student.getTeam() != null).collect(Collectors.toList());
+
+        // Then the former members (BR-former-team-member): on no team now, but evaluated that week. "Former" is
+        // computed as "on no team now", which covers removal (UC-TEA-remove-student) and deactivation alike.
+        students.addAll(this.evaluationRepository.findFormerMembersEvaluatedInWeek(sectionId, week));
 
         // For each student, compute her average total score, collect all public comments and private comments, and compute rating averages for each criterion.
         students.forEach(student -> {
             PeerEvaluationAverage peerEvaluationAverage = getPeerEvaluationAverage(week, student);
+            peerEvaluationAverage.setFormerMember(student.getTeam() == null);
             report.getPeerEvaluationAverages().add(peerEvaluationAverage);
         });
 

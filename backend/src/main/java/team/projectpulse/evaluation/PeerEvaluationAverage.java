@@ -14,6 +14,7 @@ public class PeerEvaluationAverage {
     private List<String> publicComments;
     private List<String> privateComments;
     private List<RatingAverage> ratingAverages;
+    private boolean formerMember; // Set only by the course section's weekly report: she is on no team now (BR-former-team-member)
 
 
     public PeerEvaluationAverage() {
@@ -97,6 +98,14 @@ public class PeerEvaluationAverage {
 
     public void setRatingAverages(List<RatingAverage> ratingAverages) {
         this.ratingAverages = ratingAverages;
+    }
+
+    public boolean isFormerMember() {
+        return formerMember;
+    }
+
+    public void setFormerMember(boolean formerMember) {
+        this.formerMember = formerMember;
     }
 
 }

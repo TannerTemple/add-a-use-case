@@ -494,6 +494,60 @@ class EvaluationServiceTest {
     }
 
     @Test
+    void testUpdatePeerEvaluationOfAFormerTeamMember() {
+        // Given
+        // Eric has left Team1 (removed or deactivated) while 2023-W31's window is still open (BR-former-team-member)
+        LocalDate fixedDate = LocalDate.of(2023, 8, 8);
+        Clock fixedClock = Clock.fixed(fixedDate.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
+        given(this.clock.instant()).willReturn(fixedClock.instant());
+        given(this.clock.getZone()).willReturn(fixedClock.getZone());
+
+        PeerEvaluation oldPeerEvaluation = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "public comment", "private comment");
+        oldPeerEvaluation.setPeerEvaluationId(1);
+        PeerEvaluation update = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "new public comment", "new private comment");
+        this.eric.getTeam().removeStudent(this.eric);
+
+        given(this.evaluationRepository.findById(1)).willReturn(Optional.of(oldPeerEvaluation));
+
+        // When
+        Throwable throwable = catchThrowable(() -> this.evaluationService.updatePeerEvaluation(1, update));
+
+        // Then
+        assertThat(throwable)
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("The evaluator and evaluatee must be on the same team.");
+        assertThat(oldPeerEvaluation.getPublicComment()).isEqualTo("public comment");
+        verify(this.evaluationRepository, times(0)).save(any(PeerEvaluation.class));
+    }
+
+    @Test
+    void testUpdatePeerEvaluationWhenEvaluatorAndEvaluateeAreBothOnNoTeam() {
+        // Given
+        // Two students on no team never match, so neither can rewrite an evaluation of the other
+        LocalDate fixedDate = LocalDate.of(2023, 8, 8);
+        Clock fixedClock = Clock.fixed(fixedDate.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
+        given(this.clock.instant()).willReturn(fixedClock.instant());
+        given(this.clock.getZone()).willReturn(fixedClock.getZone());
+
+        PeerEvaluation oldPeerEvaluation = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "public comment", "private comment");
+        oldPeerEvaluation.setPeerEvaluationId(1);
+        PeerEvaluation update = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "new public comment", "new private comment");
+        this.john.getTeam().removeStudent(this.john);
+        this.eric.getTeam().removeStudent(this.eric);
+
+        given(this.evaluationRepository.findById(1)).willReturn(Optional.of(oldPeerEvaluation));
+
+        // When
+        Throwable throwable = catchThrowable(() -> this.evaluationService.updatePeerEvaluation(1, update));
+
+        // Then
+        assertThat(throwable)
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("The evaluator and evaluatee must be on the same team.");
+        verify(this.evaluationRepository, times(0)).save(any(PeerEvaluation.class));
+    }
+
+    @Test
     void testGetPeerEvaluationAverage() {
         // Given
         given(this.evaluationRepository.findByWeekAndEvaluateeId("2023-W31", 4)).willReturn(this.ericsW31Evaluations);
@@ -590,6 +644,82 @@ class EvaluationServiceTest {
         assertThat(report.getPeerEvaluationAverages().get(1).getAverageTotalScore()).isCloseTo(50.0, within(0.01));
         assertThat(report.getPeerEvaluationAverages().get(2).getAverageTotalScore()).isCloseTo(51.0, within(0.01));
         assertThat(report.getPeerEvaluationAverages().get(3).getAverageTotalScore()).isCloseTo(52.0, within(0.01));
+    }
+
+    @Test
+    void testGenerateWeeklyPeerEvaluationReportForSectionCurrentMembersAreNotFormerMembers() {
+        // Given
+        given(this.sectionRepository.findById(anyInt())).willReturn(Optional.of(new Section("2023-2024", LocalDate.of(2023, 8, 14), LocalDate.of(2024, 4, 29), true, DayOfWeek.MONDAY, LocalTime.of(23, 59), DayOfWeek.TUESDAY, LocalTime.of(23, 59))));
+        given(this.studentRepository.findBySectionSectionId(2)).willReturn(this.students);
+        given(this.evaluationRepository.findFormerMembersEvaluatedInWeek(2, "2023-W31")).willReturn(List.of());
+
+        // When
+        WeeklyPeerEvaluationReport report = this.evaluationService.generateWeeklyPeerEvaluationReportForSection(2, "2023-W31");
+
+        // Then
+        assertThat(report.getPeerEvaluationAverages()).hasSize(5);
+        assertThat(report.getPeerEvaluationAverages()).noneMatch(PeerEvaluationAverage::isFormerMember);
+    }
+
+    @Test
+    void testGenerateWeeklyPeerEvaluationReportForSectionListsAFormerMember() {
+        // Given
+        // Eric has left Team1 and received evaluations in 2023-W31 (BR-former-team-member)
+        this.eric.getTeam().removeStudent(this.eric);
+        given(this.sectionRepository.findById(anyInt())).willReturn(Optional.of(new Section("2023-2024", LocalDate.of(2023, 8, 14), LocalDate.of(2024, 4, 29), true, DayOfWeek.MONDAY, LocalTime.of(23, 59), DayOfWeek.TUESDAY, LocalTime.of(23, 59))));
+        given(this.studentRepository.findBySectionSectionId(2)).willReturn(this.students);
+        given(this.evaluationRepository.findFormerMembersEvaluatedInWeek(2, "2023-W31")).willReturn(List.of(this.eric));
+        given(this.evaluationRepository.findByWeekAndEvaluateeId(anyString(), anyInt())).willReturn(List.of());
+        given(this.evaluationRepository.findByWeekAndEvaluateeId("2023-W31", 4)).willReturn(this.ericsW31Evaluations);
+
+        // When
+        WeeklyPeerEvaluationReport report = this.evaluationService.generateWeeklyPeerEvaluationReportForSection(2, "2023-W31");
+
+        // Then
+        List<PeerEvaluationAverage> rows = report.getPeerEvaluationAverages();
+        assertThat(rows).hasSize(5); // Four on-team rows, then Eric once, as a former member
+        assertThat(rows.subList(0, 4)).noneMatch(PeerEvaluationAverage::isFormerMember);
+        PeerEvaluationAverage ericsRow = rows.get(4);
+        assertThat(ericsRow.getStudentId()).isEqualTo(4);
+        assertThat(ericsRow.isFormerMember()).isTrue();
+        assertThat(ericsRow.getTeamName()).isNull();
+        assertThat(ericsRow.getAverageTotalScore()).isCloseTo(50.0, within(0.01));
+    }
+
+    @Test
+    void testGenerateWeeklyPeerEvaluationReportForSectionOmitsAFormerMemberNotEvaluatedThatWeek() {
+        // Given
+        // Eric has left Team1 but received no evaluations in 2023-W35, so the finder does not return him
+        this.eric.getTeam().removeStudent(this.eric);
+        given(this.sectionRepository.findById(anyInt())).willReturn(Optional.of(new Section("2023-2024", LocalDate.of(2023, 8, 14), LocalDate.of(2024, 4, 29), true, DayOfWeek.MONDAY, LocalTime.of(23, 59), DayOfWeek.TUESDAY, LocalTime.of(23, 59))));
+        given(this.studentRepository.findBySectionSectionId(2)).willReturn(this.students);
+        given(this.evaluationRepository.findFormerMembersEvaluatedInWeek(2, "2023-W35")).willReturn(List.of());
+
+        // When
+        WeeklyPeerEvaluationReport report = this.evaluationService.generateWeeklyPeerEvaluationReportForSection(2, "2023-W35");
+
+        // Then
+        assertThat(report.getPeerEvaluationAverages()).hasSize(4);
+        assertThat(report.getPeerEvaluationAverages()).noneMatch(row -> row.getStudentId().equals(4));
+    }
+
+    @Test
+    void testGenerateWeeklyPeerEvaluationReportForSectionFormerMembersFollowOnTeamRowsInFinderOrder() {
+        // Given
+        // The finder orders former members by last name, then first name; the report keeps that order after the on-team rows
+        this.woody.getTeam().removeStudent(this.woody); // Allen
+        this.eric.getTeam().removeStudent(this.eric);   // Wong
+        given(this.sectionRepository.findById(anyInt())).willReturn(Optional.of(new Section("2023-2024", LocalDate.of(2023, 8, 14), LocalDate.of(2024, 4, 29), true, DayOfWeek.MONDAY, LocalTime.of(23, 59), DayOfWeek.TUESDAY, LocalTime.of(23, 59))));
+        given(this.studentRepository.findBySectionSectionId(2)).willReturn(this.students);
+        given(this.evaluationRepository.findFormerMembersEvaluatedInWeek(2, "2023-W31")).willReturn(List.of(this.woody, this.eric));
+
+        // When
+        WeeklyPeerEvaluationReport report = this.evaluationService.generateWeeklyPeerEvaluationReportForSection(2, "2023-W31");
+
+        // Then
+        List<PeerEvaluationAverage> rows = report.getPeerEvaluationAverages();
+        assertThat(rows).extracting(PeerEvaluationAverage::getLastName).containsExactly("Smith", "Moon", "Wagner", "Allen", "Wong");
+        assertThat(rows).extracting(PeerEvaluationAverage::isFormerMember).containsExactly(false, false, false, true, true);
     }
 
     @Test
