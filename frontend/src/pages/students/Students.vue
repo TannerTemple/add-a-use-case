@@ -35,11 +35,11 @@
       <el-table-column label="Team" prop="teamName"></el-table-column>
       <el-table-column label="Status" prop="enabled">
         <template #default="{ row }">
-          <el-tag type="success" v-if="row.enabled">Enabled</el-tag>
-          <el-tag type="danger" v-else>Disabled</el-tag>
+          <el-tag type="success" v-if="row.enabled">Active</el-tag>
+          <el-tag type="danger" v-else>Deactivated</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Operations" width="120">
+      <el-table-column label="Operations" width="140">
         <template #default="{ row }">
           <el-button
             icon="Edit"
@@ -47,6 +47,15 @@
             plain
             type="primary"
             @click.stop="showEditStudentDialog(row)"
+          ></el-button>
+          <el-button
+            v-if="row.enabled"
+            icon="SwitchButton"
+            circle
+            plain
+            type="danger"
+            title="Deactivate"
+            @click.stop="confirmDeactivateStudent(row)"
           ></el-button>
         </template>
       </el-table-column>
@@ -77,8 +86,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { searchStudents } from '@/apis/student'
+import { h, onMounted, ref } from 'vue'
+import { deactivateStudent, searchStudents } from '@/apis/student'
 import type {
   SearchStudentByCriteriaResponse,
   Student,
@@ -86,7 +95,7 @@ import type {
 } from '@/apis/student/types'
 import { useSettingsStore } from '@/stores/settings'
 import EditStudentForm from './EditStudentForm.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const searchCriteria = ref<StudentSearchCriteria>({
   sectionId: NaN,
@@ -162,6 +171,43 @@ function showEditStudentDialog(student: Student) {
 function closeDialog() {
   dialogVisible.value = false
   loadStudents()
+}
+
+// UC-STU-deactivate-student: warn of every consequence of deactivation (step 4), then deactivate on confirmation
+function confirmDeactivateStudent(student: Student) {
+  ElMessageBox.confirm(
+    h('div', [
+      h('p', `Deactivate ${student.firstName} ${student.lastName}?`),
+      h('ul', { style: 'padding-left: 18px; margin: 8px 0 0' }, [
+        h('li', 'She can no longer log in or submit weekly activity reports and peer evaluations.'),
+        h('li', 'She is removed from her team, and her teammates can no longer evaluate her.'),
+        h(
+          'li',
+          'Her account and past work are kept, and she appears as a former member in the weekly peer evaluation report.'
+        ),
+        h('li', 'The account can be reactivated later, but that does not restore her team.'),
+        h('li', 'This is not deletion.')
+      ])
+    ]),
+    'Deactivate student',
+    {
+      confirmButtonText: 'Deactivate',
+      cancelButtonText: 'Cancel',
+      type: 'warning'
+    }
+  )
+    .then(async () => {
+      try {
+        await deactivateStudent(student.id as number)
+        ElMessage.success('Student deactivated.')
+      } catch {
+        // 3a (409, already deactivated): the shared interceptor has already shown the server's message
+      }
+      loadStudents()
+    })
+    .catch(() => {
+      // 5a: cancelled, no request sent
+    })
 }
 
 import { useRouter } from 'vue-router'
