@@ -319,11 +319,12 @@ const transferData = ref({
 const availableSections = ref<Section[]>([])
 const docCreating = ref<Record<number, boolean>>({}) // Track which team is currently creating documents to show loading state on the button
 
-// studentsWithoutTeam is a computed property that returns students who are not in any team and whose name (full name) matches the studentNameSearch input by the user
+// studentsWithoutTeam is a computed property that returns active students who are not in any team and whose name (full name) matches the studentNameSearch input by the user
 const studentsWithoutTeam = computed(() =>
   students.value.filter(
     (student) =>
       !student.teamId &&
+      student.enabled && // A deactivated student is not offered for assignment (backend guard: OI-66)
       (student.firstName + ' ' + student.lastName)
         .toLowerCase()
         .includes(studentNameSearch.value.toLowerCase())
