@@ -52,6 +52,7 @@ export interface PeerEvaluationAverage {
   publicComments: string[]
   privateComments: string[]
   ratingAverages: RatingAverage[]
+  formerMember: boolean // Set by the course section's weekly report: on no team now, evaluated that week (BR-former-team-member)
 }
 
 export interface RatingAverage {

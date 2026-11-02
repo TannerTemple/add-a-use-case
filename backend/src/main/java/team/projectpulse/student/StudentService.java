@@ -4,13 +4,13 @@ import team.projectpulse.section.Section;
 import team.projectpulse.section.SectionRepository;
 import team.projectpulse.system.UserUtils;
 import team.projectpulse.system.exception.ObjectNotFoundException;
+import team.projectpulse.system.exception.StudentStatusConflictException;
+import team.projectpulse.team.Team;
 import team.projectpulse.user.userinvitation.UserInvitationService;
 import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -114,15 +114,42 @@ public class StudentService {
         oldStudent.setLastName(update.getLastName());
         oldStudent.setEmail(update.getEmail());
 
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        // If the user is an admin, then the user can update all the fields
-        if (authentication.getAuthorities().stream().anyMatch(grantedAuthority -> grantedAuthority.getAuthority().equals("ROLE_instructor"))) {
-            oldStudent.setEnabled(update.isEnabled());
-//            oldStudent.setRoles(update.getRoles());
+        // The generic update may reactivate a student but never deactivate her: deactivation is its own action
+        // (deactivateStudent), which warns first and removes her from her team. Only an instructor may reactivate.
+        // The route also admits the student herself, and a token issued before her deactivation stays valid for
+        // up to 2 hours (FR-SEC-active-account), so without the role check she could reactivate herself.
+        if (update.isEnabled() && this.userUtils.hasRole("ROLE_instructor")) {
+            oldStudent.setEnabled(true);
         }
 
         return this.studentRepository.save(oldStudent);
+    }
+
+    /**
+     * Deactivates a student (UC-STU-deactivate-student): she can no longer log in, and she is removed from her team
+     * in the same transaction (BR-student-lifecycle), which makes her a former member of it (BR-former-team-member).
+     * Her account and her submitted work are kept.
+     *
+     * <p>Who may is settled by the route rule, which has already resolved this student against the caller's course
+     * or course section, so there is no second id to scope here.
+     *
+     * @throws StudentStatusConflictException if she is already deactivated (extension 3a); nothing is changed
+     */
+    public Student deactivateStudent(Integer studentId) {
+        Student student = this.studentRepository.findById(studentId)
+                .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
+
+        if (!student.isEnabled()) {
+            throw new StudentStatusConflictException("This student is already deactivated.");
+        }
+
+        Team team = student.getTeam();
+        if (team != null) {
+            team.removeStudent(student);
+        }
+        student.setEnabled(false);
+
+        return this.studentRepository.save(student);
     }
 
     public void deleteStudent(Integer studentId) {

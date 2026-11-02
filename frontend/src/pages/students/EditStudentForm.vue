@@ -13,14 +13,13 @@
     <el-form-item label="Username:" prop="username">
       <el-input v-model="studentBeingEdited.username"></el-input>
     </el-form-item>
-    <el-form-item label="Status:" prop="enabled">
-      <el-switch
-        v-model="studentBeingEdited.enabled"
-        inline-prompt
-        active-text="Enabled"
-        inactive-text="Disabled"
-        style="--el-switch-on-color: #13ce66; --el-switch-off-color: #ff4949"
-      />
+    <el-form-item label="Status:">
+      <el-tag type="success" v-if="wasActive === true">Active</el-tag>
+      <template v-else-if="wasActive === false">
+        <el-tag type="danger" style="margin-right: 12px">Deactivated</el-tag>
+        <!-- Reactivation through the generic update, kept until UC-STU-reactivate-student is designed -->
+        <el-checkbox v-model="studentBeingEdited.enabled">Reactivate</el-checkbox>
+      </template>
     </el-form-item>
     <el-form-item label="First Name:" prop="firstName">
       <el-input v-model="studentBeingEdited.firstName"></el-input>
@@ -63,6 +62,7 @@ const studentBeingEdited = ref<Student>({
 })
 
 const studentForm = ref<FormInstance>() // Form reference
+const wasActive = ref<boolean>() // Status as loaded, unset until then so no status shows early: deactivation is its own action on the student list, so this form can only reactivate
 
 // Validation rules
 const rules = {
@@ -74,7 +74,6 @@ const rules = {
       trigger: 'blur'
     }
   ],
-  enabled: [{ required: true, message: 'Please select the status of the user.', trigger: 'blur' }],
   firstName: [
     { required: true, message: 'Please provide the first name of the user.', trigger: 'blur' }
   ],
@@ -94,6 +93,7 @@ async function loadStudent(studentId: number) {
   studentBeingEdited.value.id = result.data.id as number
   studentBeingEdited.value.username = result.data.username
   studentBeingEdited.value.enabled = result.data.enabled
+  wasActive.value = result.data.enabled as boolean
   studentBeingEdited.value.firstName = result.data.firstName
   studentBeingEdited.value.lastName = result.data.lastName
   studentBeingEdited.value.email = result.data.email
