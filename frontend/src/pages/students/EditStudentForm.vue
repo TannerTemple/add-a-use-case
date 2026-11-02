@@ -14,8 +14,8 @@
       <el-input v-model="studentBeingEdited.username"></el-input>
     </el-form-item>
     <el-form-item label="Status:">
-      <el-tag type="success" v-if="wasActive">Active</el-tag>
-      <template v-else>
+      <el-tag type="success" v-if="wasActive === true">Active</el-tag>
+      <template v-else-if="wasActive === false">
         <el-tag type="danger" style="margin-right: 12px">Deactivated</el-tag>
         <!-- Reactivation through the generic update, kept until UC-STU-reactivate-student is designed -->
         <el-checkbox v-model="studentBeingEdited.enabled">Reactivate</el-checkbox>
@@ -62,7 +62,7 @@ const studentBeingEdited = ref<Student>({
 })
 
 const studentForm = ref<FormInstance>() // Form reference
-const wasActive = ref<boolean>(true) // Status as loaded: deactivation is its own action on the student list, so this form can only reactivate
+const wasActive = ref<boolean>() // Status as loaded, unset until then so no status shows early: deactivation is its own action on the student list, so this form can only reactivate
 
 // Validation rules
 const rules = {
