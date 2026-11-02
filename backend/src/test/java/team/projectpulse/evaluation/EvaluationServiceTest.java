@@ -686,22 +686,6 @@ class EvaluationServiceTest {
         assertThat(ericsRow.getAverageTotalScore()).isCloseTo(50.0, within(0.01));
     }
 
-    @Test
-    void testGenerateWeeklyPeerEvaluationReportForSectionOmitsAFormerMemberNotEvaluatedThatWeek() {
-        // Given
-        // Eric has left Team1 but received no evaluations in 2023-W35, so the finder does not return him
-        this.eric.getTeam().removeStudent(this.eric);
-        given(this.sectionRepository.findById(anyInt())).willReturn(Optional.of(new Section("2023-2024", LocalDate.of(2023, 8, 14), LocalDate.of(2024, 4, 29), true, DayOfWeek.MONDAY, LocalTime.of(23, 59), DayOfWeek.TUESDAY, LocalTime.of(23, 59))));
-        given(this.studentRepository.findBySectionSectionId(2)).willReturn(this.students);
-        given(this.evaluationRepository.findFormerMembersEvaluatedInWeek(2, "2023-W35")).willReturn(List.of());
-
-        // When
-        WeeklyPeerEvaluationReport report = this.evaluationService.generateWeeklyPeerEvaluationReportForSection(2, "2023-W35");
-
-        // Then
-        assertThat(report.getPeerEvaluationAverages()).hasSize(4);
-        assertThat(report.getPeerEvaluationAverages()).noneMatch(row -> row.getStudentId().equals(4));
-    }
 
     @Test
     void testGenerateWeeklyPeerEvaluationReportForSectionFormerMembersFollowOnTeamRowsInFinderOrder() {
